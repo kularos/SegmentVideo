@@ -19,6 +19,8 @@
 
 ### Method 1: Interactive Run Script (Easiest)
 
+**For Ellipsoid Tracking:**
+
 1. **Put your video in the videos folder:**
    ```bash
    mkdir videos
@@ -43,7 +45,19 @@
    - Select interactive mode
    - Confirm and start!
 
-### Method 2: Direct Command Line
+### Method 2: Chain/Curve Tracking
+
+**For tracking worms, fibers, or linear structures:**
+
+```bash
+# Track with 5 segments (6 control points)
+python run_chain.py videos/your_video.wmv 5 2
+
+# Track with more segments for complex shapes
+python run_chain.py videos/your_video.wmv 10 2
+```
+
+### Method 3: Direct Command Line
 
 ```bash
 python example_workflow.py videos/your_video.wmv 2
@@ -55,12 +69,14 @@ python example_workflow.py videos/your_video.wmv 2
 
 2. **Prediction**: Model makes initial predictions on keyframes
 
-3. **Verification**: For each keyframe:
+3. **Verification with temporal consistency**: For each keyframe:
    - A matplotlib window appears
-   - Frame is shown with model overlay (red ellipse)
+   - Frame is shown with model overlay (red ellipse/chain)
+   - **After the first frame**, each prediction starts from your last accepted position
    - You can:
-     - Press **'A'** to accept
+     - Press **'A'** to accept (often needs little/no adjustment after frame 1!)
      - Adjust parameters in text boxes and press Enter to update
+     - Drag control points to fine-tune
      - Press **'S'** to skip
    - Window closes and moves to next frame
 
@@ -70,10 +86,15 @@ python example_workflow.py videos/your_video.wmv 2
 
 ## Tips
 
+- **Take your time on frame 1**: Position the model carefully on the first frame
+- **Subsequent frames are easier**: Each frame starts from your last position, needing only minor adjustments
 - **Start with pZ=2 or pZ=3**: This gives you a manageable number of keyframes
-- **Adjust parameters by typing**: Click in text box, type new value, press Enter
+- **Use drag controls**: Left-click and drag control points to adjust - it's faster than typing!
+  - **Ellipsoids**: Drag red dot to move, drag red square to rotate/resize
+  - **Chains**: Drag endpoints (squares) freely, middle points (circles) move perpendicular only
 - **Watch the center point**: The red dot shows the center - make sure it's on your feature
 - **Use keyboard shortcuts**: 'A' is faster than clicking "Accept"
+- **Smooth motion saves time**: For features with smooth motion, temporal consistency means most frames need little/no adjustment!
 
 ## Common Issues
 

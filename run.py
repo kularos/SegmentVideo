@@ -195,7 +195,8 @@ def main():
     
     try:
         from examples.example_workflow import assisted_segmentation_workflow
-        
+
+
         state, tensor, frame_indices = assisted_segmentation_workflow(
             str(selected_video),
             pZ=pz,
