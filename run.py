@@ -1,201 +1,224 @@
 #!/usr/bin/env python3
 """
-Example workflow for assisted manual segmentation.
-
-This demonstrates the complete pipeline:
-1. Load video at correlation time scale (pZ)
-2. Run model predictions on keyframes
-3. User verifies/corrects predictions
-4. Interpolate to fill all frames
+Run script for assisted manual segmentation.
+Automatically finds videos in ./videos directory and lets user select one.
 """
 
-import numpy as np
-from lib.video import load_video_to_tensor, get_video_info
-from lib.annotation import (
-    AnnotationState,
-    ModelParameters,
-    AnnotationStatus,
-    create_ellipsoid_params
-)
+import sys
+from pathlib import Path
 
 
-def dummy_segmentation_model(frame: np.ndarray, prev_params: ModelParameters = None) -> ModelParameters:
+def find_videos(directory="./videos"):
     """
-    Placeholder for your actual segmentation model.
-
-    This would be replaced with your primitive model fitting logic
-    (e.g., ellipsoid fitting, curve extraction, etc.)
-
+    Find all video files in the specified directory.
+    
     Args:
-        frame: (3, W, H) tensor for a single frame
-        prev_params: Parameters from previous frame (for temporal consistency)
-
+        directory: Path to directory containing videos
+        
     Returns:
-        Predicted ModelParameters
+        List of video file paths
     """
-    # Dummy prediction: just return a fixed ellipsoid with some noise
-    center = np.array([frame.shape[1] // 2, frame.shape[2] // 2, 100], dtype=np.float32)
-    if prev_params is not None and 'center' in prev_params.parameters:
-        # Add small random motion from previous frame
-        center = prev_params.parameters['center'] + np.random.randn(3) * 2
-
-    semi_axes = np.array([30, 20, 15], dtype=np.float32)
-    rotation = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-
-    return create_ellipsoid_params(
-        frame_idx=0,  # Will be set by AnnotationState
-        center=center,
-        semi_axes=semi_axes,
-        rotation=rotation,
-        status=AnnotationStatus.MODEL_PREDICTED
-    )
+    video_dir = Path(directory)
+    
+    if not video_dir.exists():
+        return []
+    
+    # Common video extensions
+    video_extensions = {'.mp4', '.avi', '.mov', '.wmv', '.mkv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}
+    
+    video_files = []
+    for ext in video_extensions:
+        video_files.extend(video_dir.glob(f'*{ext}'))
+        video_files.extend(video_dir.glob(f'*{ext.upper()}'))
+    
+    return sorted(video_files)
 
 
-def user_verification_interface(frame: np.ndarray, predicted_params: ModelParameters) -> tuple[bool, ModelParameters]:
+def select_video(video_files):
     """
-    Placeholder for user verification interface.
-
-    In a real application, this would:
-    - Display the frame with the predicted model overlay
-    - Allow user to adjust model parameters interactively
-    - Return whether user accepted or modified the prediction
-
+    Display menu for user to select a video.
+    
     Args:
-        frame: (3, W, H) tensor for the frame
-        predicted_params: Model's prediction
-
+        video_files: List of Path objects
+        
     Returns:
-        (accepted, corrected_params): Whether user accepted, and final parameters
+        Selected video path or None
     """
-    # Dummy: randomly "accept" 80% of predictions, "correct" 20%
-    accepted = np.random.rand() > 0.2
+    if not video_files:
+        return None
+    
+    print("\n" + "="*80)
+    print("AVAILABLE VIDEOS")
+    print("="*80)
+    
+    for i, video in enumerate(video_files, 1):
+        # Get file size
+        size_mb = video.stat().st_size / (1024 * 1024)
+        print(f"  [{i}] {video.name} ({size_mb:.1f} MB)")
+    
+    print("="*80)
+    
+    while True:
+        try:
+            choice = input(f"\nSelect video (1-{len(video_files)}) or 'q' to quit: ").strip()
+            
+            if choice.lower() == 'q':
+                return None
+            
+            idx = int(choice) - 1
+            if 0 <= idx < len(video_files):
+                return video_files[idx]
+            else:
+                print(f"Invalid choice. Please enter a number between 1 and {len(video_files)}.")
+        except ValueError:
+            print("Invalid input. Please enter a number or 'q' to quit.")
 
-    if accepted:
-        return True, predicted_params
-    else:
-        # Simulate user making small corrections
-        corrected = predicted_params.copy()
-        if 'center' in corrected.parameters:
-            corrected.parameters['center'] += np.random.randn(3) * 5
-        return False, corrected
 
-
-def assisted_segmentation_workflow(video_path: str, pZ: int = 2):
+def select_pz():
     """
-    Complete assisted segmentation workflow.
-
-    Args:
-        video_path: Path to video file
-        pZ: Temporal zoom level (correlation time scale)
+    Prompt user to select pZ value.
+    
+    Returns:
+        pZ value (int)
     """
-    print("=" * 80)
-    print("ASSISTED MANUAL SEGMENTATION WORKFLOW")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print("TEMPORAL ZOOM LEVEL (pZ)")
+    print("="*80)
+    print("pZ controls temporal downsampling (frame skip = 2^pZ):")
+    print("  pZ=0: Load every frame (no downsampling)")
+    print("  pZ=1: Load every 2nd frame")
+    print("  pZ=2: Load every 4th frame (recommended starting point)")
+    print("  pZ=3: Load every 8th frame (coarse, low memory)")
+    print("  pZ=4: Load every 16th frame (very coarse)")
+    print("="*80)
+    
+    while True:
+        try:
+            choice = input("\nSelect pZ (0-4) or press Enter for default (2): ").strip()
+            
+            if choice == '':
+                return 2
+            
+            pz = int(choice)
+            if 0 <= pz <= 4:
+                return pz
+            else:
+                print("Invalid choice. Please enter a number between 0 and 4.")
+        except ValueError:
+            print("Invalid input. Please enter a number or press Enter for default.")
 
-    # Step 1: Load video at keyframe resolution
-    print(f"\nStep 1: Loading video with pZ={pZ} (every {2 ** pZ} frames)")
-    print("-" * 80)
-    tensor, frame_indices = load_video_to_tensor(video_path, pZ=pZ)
 
-    # Initialize annotation state
-    video_info = get_video_info(video_path)
-    state = AnnotationState(video_info['frames'], frame_indices)
-
-    print(f"\nLoaded {len(frame_indices)} keyframes from {video_info['frames']} total frames")
-
-    # Step 2: Run model predictions on keyframes
-    print(f"\nStep 2: Running model predictions on keyframes")
-    print("-" * 80)
-    prev_params = None
-    for i, frame_idx in enumerate(frame_indices):
-        frame = tensor[:, :, :, i]
-
-        # Run model prediction
-        predicted_params = dummy_segmentation_model(frame, prev_params)
-        state.set_prediction(frame_idx, predicted_params)
-
-        prev_params = predicted_params
-
-        if (i + 1) % 50 == 0:
-            print(f"  Predicted {i + 1}/{len(frame_indices)} keyframes")
-
-    print(f"Completed predictions for all {len(frame_indices)} keyframes")
-
-    # Step 3: User verification (simulated)
-    print(f"\nStep 3: User verification of keyframes")
-    print("-" * 80)
-    n_accepted = 0
-    n_corrected = 0
-
-    for i, frame_idx in enumerate(frame_indices):
-        frame = tensor[:, :, :, i]
-        predicted_params = state.get_annotation(frame_idx)
-
-        # Simulate user verification
-        accepted, corrected_params = user_verification_interface(frame, predicted_params)
-
-        # Mark as verified
-        state.verify_annotation(frame_idx, corrected_params)
-
-        if accepted:
-            n_accepted += 1
+def select_mode():
+    """
+    Prompt user to select interactive mode.
+    
+    Returns:
+        True for interactive UI, False for auto-accept
+    """
+    print("\n" + "="*80)
+    print("VERIFICATION MODE")
+    print("="*80)
+    print("  [1] Interactive UI - Verify each keyframe with matplotlib window (recommended)")
+    print("  [2] Auto-accept - Automatically accept all predictions (for testing)")
+    print("="*80)
+    
+    while True:
+        choice = input("\nSelect mode (1-2) or press Enter for interactive (1): ").strip()
+        
+        if choice == '' or choice == '1':
+            return True
+        elif choice == '2':
+            return False
         else:
-            n_corrected += 1
+            print("Invalid choice. Please enter 1 or 2.")
 
-        if (i + 1) % 50 == 0:
-            print(f"  Verified {i + 1}/{len(frame_indices)} keyframes ({n_accepted} accepted, {n_corrected} corrected)")
 
-    print(f"\nVerification complete:")
-    print(f"  Accepted: {n_accepted} ({100 * n_accepted / len(frame_indices):.1f}%)")
-    print(f"  Corrected: {n_corrected} ({100 * n_corrected / len(frame_indices):.1f}%)")
-
-    # Step 4: Interpolate between verified keyframes
-    print(f"\nStep 4: Interpolating between verified keyframes")
-    print("-" * 80)
-    n_interpolated = state.interpolate_all_verified()
-    print(f"Interpolated {n_interpolated} frames between {len(frame_indices)} keyframes")
-
-    # Step 5: Show final progress
-    print(f"\nStep 5: Final annotation statistics")
-    print("-" * 80)
-    progress = state.get_progress()
-    print(f"Total video frames: {progress['total_frames']}")
-    print(f"Keyframes (pZ={pZ}): {progress['n_keyframes']}")
-    print(f"User-verified keyframes: {progress['n_verified']}")
-    print(f"Interpolated frames: {progress['n_interpolated']}")
-    print(f"Total annotated frames: {progress['n_annotated']}")
-    print(f"Coverage: {100 * progress['total_progress']:.1f}%")
-
-    # Calculate time savings
-    manual_time_per_frame = 30  # seconds (example)
-    assisted_time_per_frame = 5  # seconds (just verification)
-
-    manual_total_time = progress['total_frames'] * manual_time_per_frame
-    assisted_total_time = progress['n_keyframes'] * assisted_time_per_frame
-    time_saved = manual_total_time - assisted_total_time
-
-    print(f"\nEstimated time savings:")
-    print(f"  Pure manual: {manual_total_time / 3600:.1f} hours")
-    print(f"  Assisted (verify keyframes): {assisted_total_time / 3600:.1f} hours")
-    print(f"  Time saved: {time_saved / 3600:.1f} hours ({100 * time_saved / manual_total_time:.1f}%)")
-
-    # Export annotations
-    print(f"\nStep 6: Exporting annotations")
-    print("-" * 80)
-    annotations = state.export_annotations()
-    print(f"Exported {len(annotations['annotations'])} frame annotations")
-
-    return state, tensor, frame_indices
+def main():
+    """Main run script."""
+    print("="*80)
+    print("ASSISTED MANUAL SEGMENTATION - RUN SCRIPT")
+    print("="*80)
+    
+    # Check if videos directory exists
+    videos_dir = Path("./videos")
+    if not videos_dir.exists():
+        print(f"\n⚠ Videos directory not found: {videos_dir.absolute()}")
+        print("\nCreating ./videos directory...")
+        videos_dir.mkdir(parents=True)
+        print(f"✓ Created {videos_dir.absolute()}")
+        print("\nPlease add video files to this directory and run the script again.")
+        return 1
+    
+    # Find video files
+    video_files = find_videos("./videos")
+    
+    if not video_files:
+        print(f"\n⚠ No video files found in {videos_dir.absolute()}")
+        print("\nSupported formats: .mp4, .avi, .mov, .wmv, .mkv, .flv, .webm, .m4v, .mpg, .mpeg")
+        print("\nPlease add video files to the ./videos directory and run again.")
+        return 1
+    
+    # User selects video
+    selected_video = select_video(video_files)
+    if selected_video is None:
+        print("\nOperation cancelled by user.")
+        return 0
+    
+    print(f"\n✓ Selected: {selected_video.name}")
+    
+    # User selects pZ
+    pz = select_pz()
+    print(f"\n✓ Selected pZ={pz} (every {2**pz} frames)")
+    
+    # User selects mode
+    use_ui = select_mode()
+    print(f"\n✓ Selected mode: {'Interactive UI' if use_ui else 'Auto-accept'}")
+    
+    # Confirm before proceeding
+    print("\n" + "="*80)
+    print("READY TO START")
+    print("="*80)
+    print(f"Video: {selected_video.name}")
+    print(f"pZ: {pz} (every {2**pz} frames)")
+    print(f"Mode: {'Interactive UI' if use_ui else 'Auto-accept'}")
+    print("="*80)
+    
+    confirm = input("\nProceed? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("\nOperation cancelled.")
+        return 0
+    
+    # Import and run workflow
+    print("\n" + "="*80)
+    print("STARTING WORKFLOW")
+    print("="*80 + "\n")
+    
+    try:
+        from examples.example_workflow import assisted_segmentation_workflow
+        
+        state, tensor, frame_indices = assisted_segmentation_workflow(
+            str(selected_video),
+            pZ=pz,
+            use_interactive_ui=use_ui
+        )
+        
+        print("\n" + "="*80)
+        print("WORKFLOW COMPLETE!")
+        print("="*80)
+        print(f"\nAnnotations for {selected_video.name} are ready.")
+        print("You can now export or further process the results.")
+        
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠ Workflow interrupted by user.")
+        return 1
+    except Exception as e:
+        print(f"\n\n✗ Error during workflow: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":
-
-
-
-    video_file = f"videos/200Volts-5cycles.wmv"
-    pZ = 4
-    state, tensor, frame_indices = assisted_segmentation_workflow(video_file, pZ)
-
-    print("\n" + "=" * 80)
-    print("Workflow complete! Annotations are ready for export.")
-    print("=" * 80)
+    sys.exit(main())
