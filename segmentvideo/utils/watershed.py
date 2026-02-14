@@ -148,76 +148,126 @@ class WatershedSegmenter:
                 contours=contours,
                 color=color
             )
-
-    def get_feature_edge_contour(self, marker_id: int, edge_point: Tuple[float, float]) -> Optional[np.ndarray]:
+    
+    def get_feature_edge_contour_with_anchor(self, marker_id: int, edge_point: Tuple[float, float],
+                                             base_anchor: Tuple[float, float]) -> Optional[np.ndarray]:
         """
         Extract the edge contour of a feature on the side indicated by edge_point.
-
+        
+        The contour starts at base_anchor and ends at the tip (furthest point from base).
+        
         Strategy:
-        1. Find the base point (where background, feature 1, and feature 2 meet)
+        1. Find closest contour point to base_anchor (this is the base)
         2. Find the tip point (furthest from base)
-        3. Split contour at base and tip
+        3. Split contour at base and tip into two sides
         4. Choose the side closest to edge_point
         5. Return ordered points from base to tip
-
+        
         Args:
             marker_id: Feature marker ID
             edge_point: (x, y) coordinates indicating which side to track
-
+            base_anchor: (x, y) coordinates of the base anchor point (from box fitting)
+            
         Returns:
             Numpy array of shape (N, 2) with contour points from base to tip
         """
         if marker_id not in self.features:
             return None
-
+        
         feature = self.features[marker_id]
-
+        
         if not feature.contours:
             return None
-
+        
         # Find the largest contour (main feature outline)
         main_contour = max(feature.contours, key=cv2.contourArea)
         contour_points = main_contour.reshape(-1, 2).astype(np.float32)
-
-        # Step 1: Find base point (lowest y-coordinate, where all 3 regions meet)
-        # Assuming the base is at the bottom of the image
-        base_idx = np.argmax(contour_points[:, 1])  # Highest y value (bottom of image)
+        
+        # Step 1: Find base point (closest contour point to base_anchor)
+        anchor_array = np.array(base_anchor, dtype=np.float32)
+        distances_to_anchor = np.linalg.norm(contour_points - anchor_array, axis=1)
+        base_idx = np.argmin(distances_to_anchor)
         base_point = contour_points[base_idx]
-
+        
         # Step 2: Find tip point (furthest from base)
         distances_from_base = np.linalg.norm(contour_points - base_point, axis=1)
         tip_idx = np.argmax(distances_from_base)
         tip_point = contour_points[tip_idx]
-
+        
         # Step 3: Split contour into two sides
         # Contour is a closed loop, so we need to split it at base and tip
         n = len(contour_points)
-
+        
         if base_idx < tip_idx:
             # Side 1: base -> tip (going forward)
-            side1 = contour_points[base_idx:tip_idx + 1]
+            side1 = contour_points[base_idx:tip_idx+1]
             # Side 2: tip -> base (going around)
-            side2 = np.vstack([contour_points[tip_idx:], contour_points[:base_idx + 1]])
+            side2 = np.vstack([contour_points[tip_idx:], contour_points[:base_idx+1]])
         else:
             # Side 1: base -> tip (going around)
-            side1 = np.vstack([contour_points[base_idx:], contour_points[:tip_idx + 1]])
+            side1 = np.vstack([contour_points[base_idx:], contour_points[:tip_idx+1]])
             # Side 2: tip -> base (going forward)
-            side2 = contour_points[tip_idx:base_idx + 1]
-
+            side2 = contour_points[tip_idx:base_idx+1]
+        
         # Step 4: Choose side closest to edge_point
         edge_array = np.array(edge_point, dtype=np.float32)
-
+        
         # Calculate average distance from each side to edge_point
         dist1 = np.mean(np.linalg.norm(side1 - edge_array, axis=1))
         dist2 = np.mean(np.linalg.norm(side2 - edge_array, axis=1))
-
+        
         # Choose the closer side
         if dist1 < dist2:
             selected_side = side1
+            print(f"Selected side 1 (avg dist: {dist1:.1f} px)")
         else:
             selected_side = side2[::-1]  # Reverse to go base->tip
-
+            print(f"Selected side 2 (avg dist: {dist2:.1f} px)")
+        
+        print(f"Contour extracted: {len(selected_side)} points from base to tip")
+        print(f"  Base: ({selected_side[0][0]:.1f}, {selected_side[0][1]:.1f})")
+        print(f"  Tip: ({selected_side[-1][0]:.1f}, {selected_side[-1][1]:.1f})")
+        
         return selected_side
+    
+    def get_feature_edge_contour(self, marker_id: int, edge_point: Tuple[float, float]) -> Optional[np.ndarray]:
+        """
+        Extract the edge contour of a feature closest to a specified edge point.
+        
+        This is the legacy method that doesn't use an anchor.
+        For new code, use get_feature_edge_contour_with_anchor instead.
+        
+        Args:
+            marker_id: Feature marker ID
+            edge_point: (x, y) coordinates of user-clicked edge point
+            
+        Returns:
+            Numpy array of shape (N, 2) with contour points, or None if feature not found
+        """
+        if marker_id not in self.features:
+            return None
+        
+        feature = self.features[marker_id]
+        
+        if not feature.contours:
+            return None
+        
+        # Find the largest contour (main feature outline)
+        main_contour = max(feature.contours, key=cv2.contourArea)
+        
+        # Reshape contour from (N, 1, 2) to (N, 2)
+        contour_points = main_contour.reshape(-1, 2).astype(np.float32)
+        
+        # Find the point on the contour closest to the edge_point
+        edge_array = np.array(edge_point, dtype=np.float32)
+        distances = np.linalg.norm(contour_points - edge_array, axis=1)
+        closest_idx = np.argmin(distances)
+        
+        # For now, return the full contour
+        # In a more advanced implementation, we could extract just one side
+        # of the contour relative to the clicked point
+        
+        return contour_points
     
     def extract_feature_skeleton(self, marker_id: int) -> Optional[np.ndarray]:
         """
