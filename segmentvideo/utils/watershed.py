@@ -64,7 +64,13 @@ class WatershedSegmenter:
         Returns:
             WatershedSeed object
         """
-        color = self.FEATURE_COLORS[(marker_id - 1) % len(self.FEATURE_COLORS)]
+        if marker_id == 1:
+            color = 'lightblue'  # Background
+        else:
+            # Feature 1 (marker_id=2) -> FEATURE_COLORS[1] (lime)
+            # Feature 2 (marker_id=3) -> FEATURE_COLORS[2] (magenta)
+            color = self.FEATURE_COLORS[marker_id - 1]
+        
         seed = WatershedSeed(x, y, marker_id, color)
         self.seeds.append(seed)
         return seed
@@ -100,7 +106,7 @@ class WatershedSegmenter:
         markers[:, 0] = 1
         markers[:, -1] = 1
         
-        # Place seed markers
+        # Place seed markers directly
         for seed in self.seeds:
             cv2.circle(markers, (int(seed.x), int(seed.y)), 3, seed.marker_id, -1)
         
@@ -133,8 +139,8 @@ class WatershedSegmenter:
             # Find contours
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             
-            # Get color
-            color = self.FEATURE_COLORS[marker_id % len(self.FEATURE_COLORS)]
+            # Get color: marker_id 2 -> FEATURE_COLORS[1] (lime), marker_id 3 -> FEATURE_COLORS[2] (magenta)
+            color = self.FEATURE_COLORS[marker_id - 1]
             
             self.features[marker_id] = WatershedFeature(
                 marker_id=marker_id,
@@ -142,45 +148,76 @@ class WatershedSegmenter:
                 contours=contours,
                 color=color
             )
-    
+
     def get_feature_edge_contour(self, marker_id: int, edge_point: Tuple[float, float]) -> Optional[np.ndarray]:
         """
-        Extract the edge contour of a feature closest to a specified edge point.
-        
-        This is used when the user clicks on a point to indicate which edge
-        of the feature they want to track.
-        
+        Extract the edge contour of a feature on the side indicated by edge_point.
+
+        Strategy:
+        1. Find the base point (where background, feature 1, and feature 2 meet)
+        2. Find the tip point (furthest from base)
+        3. Split contour at base and tip
+        4. Choose the side closest to edge_point
+        5. Return ordered points from base to tip
+
         Args:
             marker_id: Feature marker ID
-            edge_point: (x, y) coordinates of user-clicked edge point
-            
+            edge_point: (x, y) coordinates indicating which side to track
+
         Returns:
-            Numpy array of shape (N, 2) with contour points, or None if feature not found
+            Numpy array of shape (N, 2) with contour points from base to tip
         """
         if marker_id not in self.features:
             return None
-        
+
         feature = self.features[marker_id]
-        
+
         if not feature.contours:
             return None
-        
+
         # Find the largest contour (main feature outline)
         main_contour = max(feature.contours, key=cv2.contourArea)
-        
-        # Reshape contour from (N, 1, 2) to (N, 2)
         contour_points = main_contour.reshape(-1, 2).astype(np.float32)
-        
-        # Find the point on the contour closest to the edge_point
+
+        # Step 1: Find base point (lowest y-coordinate, where all 3 regions meet)
+        # Assuming the base is at the bottom of the image
+        base_idx = np.argmax(contour_points[:, 1])  # Highest y value (bottom of image)
+        base_point = contour_points[base_idx]
+
+        # Step 2: Find tip point (furthest from base)
+        distances_from_base = np.linalg.norm(contour_points - base_point, axis=1)
+        tip_idx = np.argmax(distances_from_base)
+        tip_point = contour_points[tip_idx]
+
+        # Step 3: Split contour into two sides
+        # Contour is a closed loop, so we need to split it at base and tip
+        n = len(contour_points)
+
+        if base_idx < tip_idx:
+            # Side 1: base -> tip (going forward)
+            side1 = contour_points[base_idx:tip_idx + 1]
+            # Side 2: tip -> base (going around)
+            side2 = np.vstack([contour_points[tip_idx:], contour_points[:base_idx + 1]])
+        else:
+            # Side 1: base -> tip (going around)
+            side1 = np.vstack([contour_points[base_idx:], contour_points[:tip_idx + 1]])
+            # Side 2: tip -> base (going forward)
+            side2 = contour_points[tip_idx:base_idx + 1]
+
+        # Step 4: Choose side closest to edge_point
         edge_array = np.array(edge_point, dtype=np.float32)
-        distances = np.linalg.norm(contour_points - edge_array, axis=1)
-        closest_idx = np.argmin(distances)
-        
-        # For now, return the full contour
-        # In a more advanced implementation, we could extract just one side
-        # of the contour relative to the clicked point
-        
-        return contour_points
+
+        # Calculate average distance from each side to edge_point
+        dist1 = np.mean(np.linalg.norm(side1 - edge_array, axis=1))
+        dist2 = np.mean(np.linalg.norm(side2 - edge_array, axis=1))
+
+        # Choose the closer side
+        if dist1 < dist2:
+            selected_side = side1
+        else:
+            selected_side = side2[::-1]  # Reverse to go base->tip
+
+        return selected_side
     
     def extract_feature_skeleton(self, marker_id: int) -> Optional[np.ndarray]:
         """
@@ -244,6 +281,10 @@ class WatershedSegmenter:
         overlay = np.zeros((self.H, self.W, 4))
         
         for marker_id, feature in self.features.items():
+            # Skip background (marker_id=1)
+            if marker_id == 1:
+                continue
+            
             color = to_rgba(feature.color)
             overlay[self.markers == marker_id] = [*color[:3], alpha]
         

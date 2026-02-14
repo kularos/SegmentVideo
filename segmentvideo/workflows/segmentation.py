@@ -79,17 +79,19 @@ class IntegratedSegmentationWorkflow:
         self.fig.canvas.mpl_connect('button_release_event', self._on_release)
         self.fig.canvas.mpl_connect('motion_notify_event', self._on_motion)
         
-        # Setup buttons
+        # Setup buttons - store references to prevent garbage collection
         ax_radio = plt.axes([0.02, 0.4, 0.08, 0.2])
         self.radio = RadioButtons(ax_radio, ('Background', 'Feature 1', 'Feature 2'))
         self.radio.on_clicked(self._set_active_id)
-
+        # Set Feature 1 as active by default (index 1)
+        self.radio.set_active(1)  # 0=Background, 1=Feature 1, 2=Feature 2
+        
         self.btn_watershed = Button(plt.axes([0.15, 0.02, 0.12, 0.05]), 'Update Mask', color='lime')
         self.btn_watershed.on_clicked(self._run_watershed)
-
+        
         self.btn_fit_curve = Button(plt.axes([0.3, 0.02, 0.12, 0.05]), 'Fit Curve', color='orange')
         self.btn_fit_curve.on_clicked(self._fit_curve_to_edge)
-
+        
         self.btn_next = Button(plt.axes([0.45, 0.02, 0.12, 0.05]), 'Next Step', color='cyan')
         self.btn_next.on_clicked(self._next_step)
     
@@ -194,7 +196,7 @@ class IntegratedSegmentationWorkflow:
             self.current_feature_id = 1
         else:
             feature_num = int(label.split(" ")[1])
-            self.current_feature_id = feature_num + 1
+            self.current_feature_id = feature_num + 1  # Feature 1 -> 2, Feature 2 -> 3
     
     def _run_watershed(self, event):
         """Run watershed segmentation."""
