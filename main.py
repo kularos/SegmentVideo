@@ -20,6 +20,7 @@ def cmd_segment(args):
     print(f"Loading video: {args.video}")
     print(f"  pZ (temporal zoom): {args.pz}")
     print(f"  Number of curve points: {args.n_points}")
+    print(f"  Box fitting method: {args.box_method}")
     
     # Load just the first frame for segmentation
     tensor, frame_indices = load_video_to_tensor(args.video, pZ=args.pz)
@@ -32,16 +33,21 @@ def cmd_segment(args):
     print("\nStarting segmentation workflow...")
     print("Follow the on-screen instructions:")
     print("  1. Place seeds (click to add, drag to move, click point to remove)")
-    print("  2. Click 'Update Mask' to run watershed")
-    print("  3. Click on the edge of Feature 1 that you want to track")
-    print("  4. Click 'Fit Curve' to fit curve model to the edge")
+    print("  2. Click 'Next Step' to run watershed and fit box")
+    print("  3. Adjust box corners by dragging blue squares")
+    print("  4. Click 'Next Step' to confirm box")
+    print("  5. Click on left or right edge of Feature 1 to track")
+    print("  6. Click 'Next Step' to fit curve model")
     
     # Run interactive workflow
-    curve_model = run_segmentation_workflow(first_frame, n_curve_points=args.n_points)
+    curve_model = run_segmentation_workflow(first_frame, 
+                                           n_curve_points=args.n_points,
+                                           box_fit_method=args.box_method)
     
     if curve_model is not None:
         print("\n✓ Curve model fitted successfully!")
         print(f"  Number of points: {curve_model.n_points}")
+        print(f"  Spline type: {curve_model.spline_type}")
         print(f"  Curve length: {curve_model.get_total_length():.1f} pixels")
         print(f"  Backbone length: {curve_model.get_backbone_length():.1f} pixels")
         
@@ -112,6 +118,9 @@ def main():
         help='Temporal zoom level (default: 2)')
     parser_segment.add_argument('--n-points', type=int, default=10,
         help='Number of curve control points (default: 10)')
+    parser_segment.add_argument('--box-method', type=str, default='ransac',
+        choices=['ransac', 'pca', 'minarea'],
+        help='Box fitting algorithm: ransac (robust to burrs/rounded corners), pca (clean rectangles), minarea (fastest) (default: ransac)')
     parser_segment.set_defaults(func=cmd_segment)
     
     # Track command

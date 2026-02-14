@@ -27,27 +27,29 @@ class IntegratedSegmentationWorkflow:
     5. Fit curve model to selected edge with anchor at box top edge midpoint
     """
     
-    def __init__(self, image: np.ndarray, n_curve_points: int = 10):
+    def __init__(self, image: np.ndarray, n_curve_points: int = 10, box_fit_method: str = 'ransac'):
         """
         Initialize workflow.
         
         Args:
             image: First frame as (H, W, 3) RGB array
             n_curve_points: Number of control points for curve model
+            box_fit_method: Box fitting algorithm - 'ransac', 'pca', or 'minarea'
         """
         self.image = image
         self.H, self.W = image.shape[:2]
         self.n_curve_points = n_curve_points
+        self.box_fit_method = box_fit_method
         
         # Initialize watershed segmenter
         self.segmenter = WatershedSegmenter(image)
         
         # Workflow state
-        self.step = 0  # 0=seed_placement, 1=box_fitting, 2=edge_selection, 3=curve_fitting, 4=complete
+        self.step = 0  # 0=seed_placement, 1=box_fitting, 2=edge_selection (fallback), 3=curve_fitting, 4=complete
         self.step_names = [
             'Seed Placement',
-            'Box Adjustment', 
-            'Edge Selection',
+            'Box Adjustment & Edge Detection', 
+            'Edge Selection (Manual Fallback)',
             'Curve Fitting',
             'Complete'
         ]
@@ -124,7 +126,7 @@ class IntegratedSegmentationWorkflow:
                 self.ax_main.add_patch(patch)
         
         elif self.step == 1:  # Box fitting
-            instructions = "Drag blue corners to adjust box | Green star = anchor point"
+            instructions = "Drag blue corners to adjust box | Green star = anchor point | Next: Auto edge detection"
             self.ax_main.set_title(f"{step_text}\n{instructions}")
             
             # Show watershed overlay
@@ -359,15 +361,35 @@ class IntegratedSegmentationWorkflow:
             except Exception as e:
                 print(f"❌ Error running watershed: {e}")
         
-        elif self.step == 1:  # Box fitting -> Edge selection
+        elif self.step == 1:  # Box fitting -> Automatic edge selection + curve fitting
             if self.box_corners is None or self.base_anchor is None:
                 print("❌ Box not fitted properly.")
                 return
             
             print(f"✓ Box confirmed. Anchor at ({self.base_anchor[0]:.1f}, {self.base_anchor[1]:.1f})")
-            self.step = 2
-            print(f"→ Next: {self.step_names[self.step]}")
-            self._update_display()
+            
+            # AUTOMATIC EDGE SELECTION using gradient analysis
+            print("\n→ Automatically detecting front edge using gradient analysis...")
+            contour = self.segmenter.select_edge_by_gradient(
+                marker_id=2,
+                base_anchor=self.base_anchor
+            )
+            
+            if contour is None or len(contour) < 10:
+                print("❌ Automatic edge detection failed. Falling back to manual selection.")
+                # Fall back to manual selection
+                self.step = 2
+                print(f"→ Next: {self.step_names[self.step]}")
+                self._update_display()
+            else:
+                print("✓ Front edge detected automatically!")
+                
+                # Set a virtual edge point (for compatibility, not actually used)
+                self.selected_edge_point = tuple(contour[len(contour)//2])
+                
+                # Fit curve immediately
+                print("\n→ Fitting curve to detected edge...")
+                self._fit_curve_to_edge_from_contour(contour)
         
         elif self.step == 2:  # Edge selection -> Curve fitting
             if self.selected_edge_point is None:
@@ -395,38 +417,14 @@ class IntegratedSegmentationWorkflow:
             print("⚠ Feature 2 not found. Cannot fit box.")
             return
         
-        feature = self.segmenter.features[3]
+        print(f"  Using box fitting method: {self.box_fit_method}")
         
-        if not feature.contours:
-            print("⚠ No contours found for Feature 2.")
+        # Use the new unified box fitting API
+        self.box_corners = self.segmenter.fit_box_to_feature(3, method=self.box_fit_method)
+        
+        if self.box_corners is None:
+            print("⚠ Box fitting failed.")
             return
-        
-        # Get main contour
-        main_contour = max(feature.contours, key=cv2.contourArea)
-        
-        # Fit minimum area rectangle
-        rect = cv2.minAreaRect(main_contour)
-        box = cv2.boxPoints(rect)
-        
-        # Sort corners: top-left, top-right, bottom-right, bottom-left
-        # Sort by y-coordinate
-        box_sorted = box[np.argsort(box[:, 1])]
-        
-        # Top two points (lowest y values - at top of image)
-        top_points = box_sorted[:2]
-        top_points = top_points[np.argsort(top_points[:, 0])]  # Sort by x
-        
-        # Bottom two points (highest y values - at bottom of image)
-        bottom_points = box_sorted[2:]
-        bottom_points = bottom_points[np.argsort(bottom_points[:, 0])]  # Sort by x
-        
-        # Arrange as [top-left, top-right, bottom-right, bottom-left]
-        self.box_corners = np.array([
-            top_points[0],      # Top-left
-            top_points[1],      # Top-right
-            bottom_points[1],   # Bottom-right
-            bottom_points[0]    # Bottom-left
-        ])
         
         # Calculate anchor point (midpoint of top edge)
         self.base_anchor = tuple(((self.box_corners[0] + self.box_corners[1]) / 2).astype(float))
@@ -435,7 +433,7 @@ class IntegratedSegmentationWorkflow:
         print(f"  Anchor at: ({self.base_anchor[0]:.1f}, {self.base_anchor[1]:.1f})")
     
     def _fit_curve_to_edge(self):
-        """Fit a curve model to the selected edge."""
+        """Fit a curve model to the selected edge (manual selection)."""
         # Extract edge contour for Feature 1 (marker_id = 2) with anchor
         contour = self.segmenter.get_feature_edge_contour_with_anchor(
             marker_id=2,
@@ -447,6 +445,10 @@ class IntegratedSegmentationWorkflow:
             print("❌ Could not extract contour for Feature 1.")
             return
         
+        self._fit_curve_to_edge_from_contour(contour)
+    
+    def _fit_curve_to_edge_from_contour(self, contour: np.ndarray):
+        """Fit curve model from an already-extracted contour."""
         # Calculate anchor tangent (perpendicular to box top edge)
         # Box top edge is from corner 0 to corner 1
         if self.box_corners is not None:
@@ -495,17 +497,19 @@ class IntegratedSegmentationWorkflow:
         return self.curve_model.to_dict()
 
 
-def run_segmentation_workflow(image: np.ndarray, n_curve_points: int = 10) -> Optional[CurveModel]:
+def run_segmentation_workflow(image: np.ndarray, n_curve_points: int = 10, 
+                              box_fit_method: str = 'ransac') -> Optional[CurveModel]:
     """
     Run the interactive segmentation workflow.
     
     Args:
         image: First frame as (H, W, 3) RGB array
         n_curve_points: Number of control points for curve model
+        box_fit_method: Box fitting algorithm - 'ransac' (default), 'pca', or 'minarea'
         
     Returns:
         Fitted CurveModel or None if workflow was cancelled
     """
-    workflow = IntegratedSegmentationWorkflow(image, n_curve_points)
+    workflow = IntegratedSegmentationWorkflow(image, n_curve_points, box_fit_method)
     workflow.run_interactive()
     return workflow.get_curve_model()
