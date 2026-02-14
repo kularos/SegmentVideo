@@ -1,276 +1,123 @@
 #!/usr/bin/env python3
 """
-Example workflow for assisted manual segmentation.
+Example: Complete workflow from watershed to curve tracking.
 
-This demonstrates the complete pipeline:
-1. Load video at correlation time scale (pZ)
-2. Run model predictions on keyframes
-3. User verifies/corrects predictions
-4. Interpolate to fill all frames
+This example demonstrates:
+1. Loading a video
+2. Running watershed segmentation on first frame
+3. Fitting a curve model to a feature edge
+4. Tracking through frames (placeholder)
 """
 
 import numpy as np
-from video_loader import load_video_to_tensor, get_video_info
-from annotation_state import (
-    AnnotationState, 
-    ModelParameters, 
-    AnnotationStatus,
-    create_ellipsoid_params,
-    verify_with_ui
-)
+from pathlib import Path
+
+from segmentvideo.io import load_video_to_tensor, get_video_info
+from segmentvideo.workflows import run_segmentation_workflow
+from segmentvideo.annotation import AnnotationState
 
 
-def dummy_segmentation_model(frame: np.ndarray, prev_params: ModelParameters = None) -> ModelParameters:
+def example_workflow(video_path: str, pZ: int = 2, n_curve_points: int = 10):
     """
-    Placeholder for your actual segmentation model.
-    
-    This would be replaced with your primitive model fitting logic
-    (e.g., ellipsoid fitting, curve extraction, etc.)
-    
-    Args:
-        frame: (3, W, H) tensor for a single frame
-        prev_params: Parameters from previous frame (for temporal consistency)
-        
-    Returns:
-        Predicted ModelParameters
-    """
-    # Dummy prediction: just return a fixed ellipsoid with some noise
-    center = np.array([frame.shape[1]//2, frame.shape[2]//2, 100], dtype=np.float32)
-    if prev_params is not None and 'center' in prev_params.parameters:
-        # Add small random motion from previous frame
-        center = prev_params.parameters['center'] + np.random.randn(3) * 2
-    
-    semi_axes = np.array([30, 20, 15], dtype=np.float32)
-    rotation = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-    
-    return create_ellipsoid_params(
-        frame_idx=0,  # Will be set by AnnotationState
-        center=center,
-        semi_axes=semi_axes,
-        rotation=rotation,
-        status=AnnotationStatus.MODEL_PREDICTED
-    )
-
-
-def user_verification_interface(frame: np.ndarray, predicted_params: ModelParameters) -> tuple[bool, ModelParameters]:
-    """
-    Placeholder for user verification interface.
-    
-    In a real application, this would:
-    - Display the frame with the predicted model overlay
-    - Allow user to adjust model parameters interactively
-    - Return whether user accepted or modified the prediction
-    
-    Args:
-        frame: (3, W, H) tensor for the frame
-        predicted_params: Model's prediction
-        
-    Returns:
-        (accepted, corrected_params): Whether user accepted, and final parameters
-    """
-    # Dummy: randomly "accept" 80% of predictions, "correct" 20%
-    accepted = np.random.rand() > 0.2
-    
-    if accepted:
-        return True, predicted_params
-    else:
-        # Simulate user making small corrections
-        corrected = predicted_params.copy()
-        if 'center' in corrected.parameters:
-            corrected.parameters['center'] += np.random.randn(3) * 5
-        return False, corrected
-
-
-def assisted_segmentation_workflow(video_path: str, pZ: int = 2, use_interactive_ui: bool = True):
-    """
-    Complete assisted segmentation workflow with temporal consistency.
+    Run complete workflow.
     
     Args:
         video_path: Path to video file
-        pZ: Temporal zoom level (correlation time scale)
-        use_interactive_ui: If True, use matplotlib UI for verification. If False, auto-accept all.
+        pZ: Temporal zoom level
+        n_curve_points: Number of curve control points
     """
-    print("="*80)
-    print("ASSISTED MANUAL SEGMENTATION WORKFLOW")
-    print("="*80)
-    print(f"Temporal consistency: ENABLED (uses last accepted state)")
+    print("=" * 60)
+    print("SegmentVideo - Complete Workflow Example")
+    print("=" * 60)
     
-    # Step 1: Load video at keyframe resolution
-    print(f"\nStep 1: Loading video with pZ={pZ} (every {2**pZ} frames)")
-    print("-"*80)
+    # Step 1: Load video
+    print("\n[Step 1] Loading video...")
+    print(f"  Video: {video_path}")
+    print(f"  Temporal zoom (pZ): {pZ}")
+    
     tensor, frame_indices = load_video_to_tensor(video_path, pZ=pZ)
+    print(f"  Loaded tensor shape: {tensor.shape}")
+    print(f"  Keyframes: {len(frame_indices)}")
     
-    # Initialize annotation state
-    video_info = get_video_info(video_path)
-    state = AnnotationState(video_info['frames'], frame_indices)
+    # Extract first frame
+    first_frame_tensor = tensor[:, :, :, 0]
+    first_frame = first_frame_tensor.transpose(2, 1, 0)  # (3, W, H) -> (H, W, 3)
     
-    print(f"\nLoaded {len(frame_indices)} keyframes from {video_info['frames']} total frames")
+    # Step 2: Run watershed segmentation
+    print("\n[Step 2] Running interactive watershed segmentation...")
+    print("  Instructions:")
+    print("    1. Place seeds (click=add, drag=move, click point=remove)")
+    print("    2. Click 'Update Mask' to run watershed")
+    print("    3. Click on Feature 1 edge that you want to track")
+    print("    4. Click 'Fit Curve' to extract curve model")
     
-    # Step 2: Run model predictions on keyframes with temporal consistency
-    print(f"\nStep 2: Running model predictions on keyframes (with temporal consistency)")
-    print("-"*80)
-    print("Note: Each prediction uses the last ACCEPTED state as initial estimate")
+    curve_model = run_segmentation_workflow(first_frame, n_curve_points=n_curve_points)
     
-    last_accepted_params = None
-    for i, frame_idx in enumerate(frame_indices):
-        frame = tensor[:, :, :, i]
-        
-        # Run model prediction using last accepted state
-        predicted_params = dummy_segmentation_model(frame, last_accepted_params)
-        state.set_prediction(frame_idx, predicted_params)
-        
-        if (i + 1) % 50 == 0:
-            print(f"  Predicted {i+1}/{len(frame_indices)} keyframes")
+    if curve_model is None:
+        print("\n✗ Workflow cancelled")
+        return
     
-    print(f"Completed predictions for all {len(frame_indices)} keyframes")
+    print(f"\n✓ Curve model created!")
+    print(f"  Points: {curve_model.n_points}")
+    print(f"  Total length: {curve_model.get_total_length():.1f} px")
+    print(f"  Backbone length: {curve_model.get_backbone_length():.1f} px")
     
-    # Step 3: User verification with temporal consistency
-    print(f"\nStep 3: User verification of keyframes")
-    print("-"*80)
-    if use_interactive_ui:
-        print("Interactive UI enabled - matplotlib windows will appear for each keyframe")
-        print("Press 'A' to accept, 'S' to skip, or adjust parameters and then accept")
-        print("Temporal consistency: Each frame starts from your last accepted position")
-    else:
-        print("Auto-accept mode (no UI)")
+    # Step 3: Initialize annotation state
+    print("\n[Step 3] Initializing annotation state...")
     
-    n_accepted = 0
-    n_corrected = 0
-    n_skipped = 0
+    total_frames = int(get_video_info(video_path)['frames'])
+    state = AnnotationState(total_frames=total_frames, frame_indices=frame_indices)
     
-    for i, frame_idx in enumerate(frame_indices):
-        frame = tensor[:, :, :, i]
-        predicted_params = state.get_annotation(frame_idx)
-        
-        # If we have a last accepted state, use it as the prediction base
-        if last_accepted_params is not None:
-            # Update prediction to start from last accepted position
-            if 'center' in last_accepted_params.parameters:
-                predicted_params.parameters['center'] = last_accepted_params.parameters['center'].copy()
-                predicted_params.parameters['semi_axes'] = last_accepted_params.parameters['semi_axes'].copy()
-                predicted_params.parameters['rotation'] = last_accepted_params.parameters['rotation'].copy()
-            state.set_prediction(frame_idx, predicted_params)
-        
-        if use_interactive_ui:
-            # Use interactive verification UI
-            accepted, corrected_params = verify_with_ui(
-                frame, 
-                predicted_params, 
-                frame_idx,
-                tensor_idx=i,
-                total_frames=len(frame_indices)
-            )
-            
-            if accepted:
-                # Check if parameters were modified
-                params_changed = not np.allclose(
-                    predicted_params.parameters.get('center', [0,0,0]),
-                    corrected_params.parameters.get('center', [0,0,0])
-                )
-                
-                if params_changed:
-                    n_corrected += 1
-                else:
-                    n_accepted += 1
-                    
-                # Mark as verified
-                state.verify_annotation(frame_idx, corrected_params)
-                
-                # Update last accepted state for next frame
-                last_accepted_params = corrected_params.copy()
-            else:
-                n_skipped += 1
-                print(f"  Skipped frame {frame_idx} - will use last accepted state for next frame")
-        else:
-            # Auto-accept mode (for testing)
-            state.verify_annotation(frame_idx, predicted_params)
-            last_accepted_params = predicted_params.copy()
-            n_accepted += 1
-        
-        if (i + 1) % 10 == 0 or i == len(frame_indices) - 1:
-            print(f"  Progress: {i+1}/{len(frame_indices)} keyframes "
-                  f"({n_accepted} accepted, {n_corrected} corrected, {n_skipped} skipped)")
+    # Set initial prediction for frame 0
+    state.set_prediction(frame_indices[0], curve_model)
+    state.verify_annotation(frame_indices[0])  # Mark as verified
     
-    print(f"\nVerification complete:")
-    print(f"  Accepted: {n_accepted} ({100*n_accepted/len(frame_indices):.1f}%)")
-    print(f"  Corrected: {n_corrected} ({100*n_corrected/len(frame_indices):.1f}%)")
-    print(f"  Skipped: {n_skipped} ({100*n_skipped/len(frame_indices):.1f}%)")
+    print(f"  Total frames: {total_frames}")
+    print(f"  Keyframes: {len(frame_indices)}")
     
-    # Step 4: Interpolate between verified keyframes
-    print(f"\nStep 4: Interpolating between verified keyframes")
-    print("-"*80)
-    n_interpolated = state.interpolate_all_verified()
-    print(f"Interpolated {n_interpolated} frames between {len(frame_indices)} keyframes")
+    state.print_progress()
     
-    # Step 5: Show final progress
-    print(f"\nStep 5: Final annotation statistics")
-    print("-"*80)
-    progress = state.get_progress()
-    print(f"Total video frames: {progress['total_frames']}")
-    print(f"Keyframes (pZ={pZ}): {progress['n_keyframes']}")
-    print(f"User-verified keyframes: {progress['n_verified']}")
-    print(f"Interpolated frames: {progress['n_interpolated']}")
-    print(f"Total annotated frames: {progress['n_annotated']}")
-    print(f"Coverage: {100*progress['total_progress']:.1f}%")
+    # Step 4: Save state
+    output_path = Path(video_path).stem + "_annotations.json"
+    state.save_to_file(output_path)
     
-    # Calculate time savings
-    manual_time_per_frame = 30  # seconds (example)
-    assisted_time_per_frame = 5  # seconds (just verification)
+    print(f"\n✓ Annotations saved to: {output_path}")
     
-    manual_total_time = progress['total_frames'] * manual_time_per_frame
-    assisted_total_time = progress['n_keyframes'] * assisted_time_per_frame
-    time_saved = manual_total_time - assisted_total_time
+    # Step 5: Tracking (placeholder)
+    print("\n[Step 4] Tracking through frames...")
+    print("  ⚠ Frame-by-frame tracking not yet implemented")
+    print("  Next steps:")
+    print(f"    - Load state from {output_path}")
+    print("    - Iterate through keyframes")
+    print("    - For each frame:")
+    print("        * Use last verified model as starting point")
+    print("        * Run model prediction")
+    print("        * Show interactive UI for verification")
+    print("        * Save corrected model")
+    print("    - Interpolate between verified frames")
     
-    print(f"\nEstimated time savings:")
-    print(f"  Pure manual: {manual_total_time/3600:.1f} hours")
-    print(f"  Assisted (verify keyframes): {assisted_total_time/3600:.1f} hours")
-    print(f"  Time saved: {time_saved/3600:.1f} hours ({100*time_saved/manual_total_time:.1f}%)")
-    
-    # Export annotations
-    print(f"\nStep 6: Exporting annotations")
-    print("-"*80)
-    annotations = state.export_annotations()
-    print(f"Exported {len(annotations['annotations'])} frame annotations")
-    
-    return state, tensor, frame_indices
+    print("\n" + "=" * 60)
+    print("Workflow Complete!")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python example_workflow.py <video_file> [pZ] [--no-ui]")
-        print("\nThis demonstrates the complete assisted segmentation workflow:")
-        print("  1. Load video at keyframe resolution (pZ)")
-        print("  2. Model predicts on keyframes")
-        print("  3. User verifies/corrects via interactive UI")
-        print("  4. Interpolate to all frames")
-        print("\nArguments:")
+        print("Usage: python example_workflow.py <video_file> [pZ] [n_points]")
+        print()
+        print("Arguments:")
         print("  video_file: Path to video file")
-        print("  pZ: Temporal zoom (default=2)")
-        print("  --no-ui: Disable interactive UI (auto-accept all predictions)")
-        print("\nExample:")
-        print("  python example_workflow.py input.wmv 2")
-        print("  python example_workflow.py input.wmv 2 --no-ui  # for testing")
+        print("  pZ: Temporal zoom (default: 2)")
+        print("  n_points: Number of curve points (default: 10)")
+        print()
+        print("Example:")
+        print("  python example_workflow.py ../videos/experiment.wmv 2 10")
         sys.exit(1)
     
     video_file = sys.argv[1]
-    pZ = 2
-    use_ui = True
+    pZ = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+    n_points = int(sys.argv[3]) if len(sys.argv) > 3 else 10
     
-    # Parse arguments
-    for arg in sys.argv[2:]:
-        if arg == '--no-ui':
-            use_ui = False
-        else:
-            try:
-                pZ = int(arg)
-            except ValueError:
-                print(f"Warning: ignoring unrecognized argument: {arg}")
-    
-    # Run the workflow
-    state, tensor, frame_indices = assisted_segmentation_workflow(video_file, pZ, use_interactive_ui=use_ui)
-    
-    print("\n" + "="*80)
-    print("Workflow complete! Annotations are ready for export.")
-    print("="*80)
+    example_workflow(video_file, pZ=pZ, n_curve_points=n_points)
